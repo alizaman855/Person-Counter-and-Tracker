@@ -1,0 +1,296 @@
+{% extends "counter/base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Camera Selection Form -->
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-8">
+        <h2 class="text-xl font-bold mb-4">Select Camera Feed</h2>
+        <form id="cameraForm" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Select Branch</label>
+                <select id="branchSelect" class="w-full p-2 border rounded-lg">
+                    <option value="">Choose a branch...</option>
+                    {% for branch_name, urls in branches %}
+                        <option value="{{ branch_name }}">{{ branch_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Select Camera</label>
+                <select id="cameraSelect" class="w-full p-2 border rounded-lg" disabled>
+                    <option value="">First select a branch...</option>
+                </select>
+            </div>
+
+            <button type="button" id="startStream" 
+                    class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                    disabled>
+                Start Stream
+            </button>
+        </form>
+    </div>
+
+    <!-- Camera Feed and Stats Display -->
+    <div id="cameraFeed" class="hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Video Feed -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+                    <div class="relative">
+                        <div class="aspect-video bg-black">
+                            <img id="streamImage" src="" alt="Camera Feed" class="w-full h-full object-cover">
+                        </div>
+                        <!-- Person Count Overlay -->
+                        <div class="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-6 py-3 rounded-lg text-xl font-bold shadow-lg space-y-2">
+                            <div>Current: <span id="currentCount">0</span></div>
+                            <div>Total: <span id="totalCount">0</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats Panel -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Real-time Detection Stats -->
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <h3 class="text-lg font-bold mb-4">Real-time Statistics</h3>
+                    <div class="grid gap-4">
+                        <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                            <div class="text-sm font-medium text-red-700">Current People Count</div>
+                            <div class="text-3xl font-bold text-red-600" id="detectedCount">0</div>
+                        </div>
+                        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                            <div class="text-sm font-medium text-green-700">Total Unique People</div>
+                            <div class="text-3xl font-bold text-green-600" id="uniqueCount">0</div>
+                        </div>
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                            <div class="text-sm font-medium text-blue-700">5-Minute Average</div>
+                            <div class="text-3xl font-bold text-blue-600" id="averageCount">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Historical Stats -->
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <h3 class="text-lg font-bold mb-4">Session Statistics</h3>
+                    <div class="space-y-4">
+                        <div class="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                            <div class="text-sm font-medium text-purple-700">Peak Count</div>
+                            <div class="text-2xl font-bold text-purple-600" id="peakCount">0</div>
+                        </div>
+                        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                            <div class="text-sm font-medium text-indigo-700">Session Duration</div>
+                            <div class="text-2xl font-bold text-indigo-600" id="sessionTime">0:00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Traffic Chart -->
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <h3 class="text-lg font-bold mb-4">Traffic Flow</h3>
+                    <div id="trafficChart" class="h-48"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script>
+// Global variables
+const branchData = {{ branch_dict|safe }};
+let updateInterval = null;
+let countHistory = [];
+let peakCount = 0;
+let startTime = null;
+let timerInterval = null;
+
+function updateDisplay() {
+    if (!startTime) return;
+    
+    const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    const display = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    
+    $('#sessionTime').text(display);
+}
+
+function stopTimer() {
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    startTime = null;
+    $('#sessionTime').text('0:00');
+}
+
+function initializeCharts() {
+    const layout = {
+        margin: { t: 20, r: 20, b: 30, l: 40 },
+        xaxis: { 
+            title: 'Time',
+            showgrid: true,
+            gridcolor: 'rgba(0,0,0,0.1)'
+        },
+        yaxis: { 
+            title: 'Count',
+            showgrid: true,
+            gridcolor: 'rgba(0,0,0,0.1)'
+        },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+    };
+
+    const data = [{
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Current Count',
+        line: { color: '#DC2626' }
+    }, {
+        x: [],
+        y: [],
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Total Unique',
+        line: { color: '#059669' }
+    }];
+
+    Plotly.newPlot('trafficChart', data, layout);
+}
+
+function updateStats() {
+    const streamUrl = $('#cameraSelect').val();
+    if (!streamUrl) return;
+
+    $.get('/camera-stats/', { url: streamUrl }, function(data) {
+        // Update current and total counts
+        const currentCount = data.count || 0;
+        const totalCount = data.total || 0;
+        
+        $('#currentCount').text(currentCount);
+        $('#totalCount').text(totalCount);
+        $('#detectedCount').text(currentCount);
+        $('#uniqueCount').text(totalCount);
+        
+        // Update count history and calculate average
+        countHistory.push(currentCount);
+        if (countHistory.length > 30) { // Keep last 30 readings (5 minutes)
+            countHistory.shift();
+        }
+        
+        const average = Math.round(countHistory.reduce((a, b) => a + b, 0) / countHistory.length);
+        $('#averageCount').text(average);
+        
+        // Update peak count
+        if (currentCount > peakCount) {
+            peakCount = currentCount;
+            $('#peakCount').text(peakCount);
+        }
+        
+        // Update chart
+        const now = new Date().toLocaleTimeString();
+        
+        Plotly.extendTraces('trafficChart', {
+            x: [[now], [now]],
+            y: [[currentCount], [totalCount]]
+        }, [0, 1]);
+
+        // Keep only last 20 points visible
+        const traceData = document.getElementById('trafficChart').data;
+        if (traceData[0].x.length > 20) {
+            Plotly.relayout('trafficChart', {
+                xaxis: {
+                    range: [traceData[0].x[traceData[0].x.length - 20], traceData[0].x[traceData[0].x.length - 1]]
+                }
+            });
+        }
+    });
+}
+
+// Handle branch selection
+$('#branchSelect').change(function() {
+    const branchName = $(this).val();
+    const cameraSelect = $('#cameraSelect');
+    
+    stopTimer();
+    
+    if (branchName) {
+        const cameras = branchData[branchName];
+        cameraSelect.empty().append('<option value="">Select a camera...</option>');
+        
+        cameras.forEach((url, index) => {
+            cameraSelect.append(`<option value="${url}">Camera ${index + 1}</option>`);
+        });
+        
+        cameraSelect.prop('disabled', false);
+    } else {
+        cameraSelect.empty().append('<option value="">First select a branch...</option>');
+        cameraSelect.prop('disabled', true);
+    }
+    
+    $('#startStream').prop('disabled', true);
+});
+
+// Handle camera selection
+$('#cameraSelect').change(function() {
+    stopTimer();
+    $('#startStream').prop('disabled', !$(this).val());
+});
+
+// Handle start stream button
+$('#startStream').click(function() {
+    const streamUrl = $('#cameraSelect').val();
+    if (!streamUrl) return;
+
+    // Clear any existing timer
+    if (timerInterval) {
+        clearInterval(timerInterval);
+    }
+
+    // Reset statistics
+    countHistory = [];
+    peakCount = 0;
+
+    // Start new timer
+    startTime = Date.now();
+    updateDisplay();
+    timerInterval = setInterval(updateDisplay, 1000);
+
+    // Show the camera feed section
+    $('#cameraFeed').removeClass('hidden');
+    initializeCharts();
+    
+    // Start the stream
+    $('#streamImage').attr('src', `/video-feed/?url=${encodeURIComponent(streamUrl)}`);
+    
+    // Start updating stats
+    if (updateInterval) {
+        clearInterval(updateInterval);
+    }
+    updateStats();
+    updateInterval = setInterval(updateStats, 1000);
+});
+
+// Clean up when leaving page
+$(window).on('beforeunload', function() {
+    if (updateInterval) {
+        clearInterval(updateInterval);
+    }
+    stopTimer();
+});
+
+// Document ready handler
+$(document).ready(function() {
+    // Initialize any necessary components
+    stopTimer();
+});
+</script>
+{% endblock %}

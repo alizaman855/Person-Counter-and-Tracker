@@ -1,0 +1,55 @@
+<!-- templates/stream.html -->
+{% extends "./base.html" %}
+
+{% block title %}{{ camera.branch.name }} - Camera {{ camera.id }}{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="bg-white rounded-lg shadow-lg p-6">
+        <h2 class="text-xl font-bold mb-4">{{ camera.branch.name }} - Camera {{ camera.id }}</h2>
+        
+        <!-- Live Stream -->
+        <div class="relative">
+            <img src="{% url 'video_feed' camera.id %}" 
+                 alt="Camera Feed" 
+                 class="w-full h-auto rounded">
+            <div id="person-count" 
+                 class="absolute top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-full">
+                Loading...
+            </div>
+        </div>
+
+        <!-- Real-time Stats -->
+        <div class="mt-6">
+            <h3 class="text-lg font-semibold mb-3">Real-time Statistics</h3>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-gray-100 p-4 rounded">
+                    <p class="text-sm text-gray-600">Current Hour Total</p>
+                    <p id="hour-total" class="text-2xl font-bold">0</p>
+                </div>
+                <div class="bg-gray-100 p-4 rounded">
+                    <p class="text-sm text-gray-600">Daily Total</p>
+                    <p id="daily-total" class="text-2xl font-bold">0</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function updateStats() {
+        $.get('/camera-stats/{{ camera.id }}/', function(data) {
+            $('#person-count').text(data.current_count + ' people');
+            $('#hour-total').text(data.hour_total);
+            $('#daily-total').text(data.daily_total);
+        });
+    }
+
+    $(document).ready(function() {
+        // Update stats every 5 seconds
+        setInterval(updateStats, 5000);
+    });
+</script>
+{% endblock %}
